@@ -10,28 +10,35 @@ use YAML::Tiny;
 use Getopt::Declare;
 use DBI;
 
-our %relMap = (); # For randReln and --maptype
+use File::Basename qw/dirname/;
 
-our $opt = Getopt::Declare->new(q'[strict]
+our $opt = Getopt::Declare->new(q'
+
 	Database connection parameters (required)
+	=========================================
 
 	--db <DBNAME>			Specify DB name (used to find field names & types)
-							[required]
 
 	--user <DBUSER>			DB username
-							[required]
 
 	--pass <DBPASS>			DB pass
-							[required]
 
+	If these are not provided, the program will look for a file \'db.cfg\' in
+	the current dir, which should contain something like the following:
+
+		user = USERNAME
+		pass = PASSWORD
+		db = DBNAME
 
 	Field control options
+	=====================
 
 	--columns <COLSPEC>		Add extra (or override) columns
 							These are comma-separated fields in the format  NAME[:TYPE:LENGTH]
 							E.G Created:Datetime,Content:HtmlText,Name:Text:30
 							Length is in chars, or is INT length otherwise (latter not impl.)
 							Column Type is one of:
+								Static - (Length is used for fixed content)
 								Num - Int
 								HtmlText - Lorem ipsum with <p> tags
 								Text - Lorem ipsum with \n
@@ -43,21 +50,36 @@ our $opt = Getopt::Declare->new(q'[strict]
 								Date
 								Timestamp
 								Enum -- Random option from Enum def.  This requires the field to be defined in the table..
+	-c <COLSPEC>			[ditto]
 
 	--exclude <COLSPEC>		Skip these columns from the output
+	-x <COLSPEC>			[ditto]
 
 	--include <COLSPEC>		Only include these columns in the output
+	-i <COLSPEC>			[ditto]
 
 	--maptable <TMAP>		Map relation to table. form is  FieldName:DBTable  eg  Author:Member, or Page:SiteTree
 
+	--many <COLSPEC>		Which columns are has_many or many_many.  Format is  COLNAME:MAXREL
+							E.g.  --many Tags:5 will create up to 5 tag relations.
+
+
+	--relfilter <FILTERS>	Format: Field:SQLWHERE, used to filter source rows in randReln.
+							E.g.  --relfilter Image:"File.Path LIKE \'%/avatars/%\'
+
+	--imgdir <DIR>			Special case of --relfilter for random Images.  Allows you to limit random images to those coming from DIR.
+							E.g.  --imgdir AvatarID:avatars  would map to images within  <sstr_dir>/assets/avatars/
 
 	Miscellaneous options
+	=====================
 
 	--dir <DIR>				Specify out-dir
 
 	--verbose				The usual!  Output to STDERR
+	--debug					Output SQL debuginfo
 
 	REQUIRED VALUES
+	===============
 
 	<CLASS>					Specify class to create (default Page)
 							[required]
@@ -66,17 +88,33 @@ our $opt = Getopt::Declare->new(q'[strict]
 							[required]
 
 ');
-
 croak unless $opt;
+
+$opt->{'--include'} ||= $opt->{'-i'};
+$opt->{'--exclude'} ||= $opt->{'-x'};
+$opt->{'--columns'} ||= $opt->{'-c'};
+
+our %typeMap = ();
+our %relMap = (); # For randReln and --maptype
+our %filters = (); # see --relfilter
+our %manyMap = (); # for --many
+our @keys;
+
+findDBParams(); # Look for stored DB params
 
 # Connect to DB
 our $mydb = DBI->connect("DBI:mysql:host=localhost;database=$opt->{'--db'}",
 		$opt->{'--user'}, $opt->{'--pass'},
-		{RaiseError=>0, PrintError=>1}
+		{RaiseError=>0, PrintError=>1
+		}
 	) or croak;
 
+if ($opt->{'--debug'}) {
+	$mydb->{TraceLevel} = '0|SQL';
+}
+
 our $class = $opt->{'<CLASS>'};
-our $fieldDef = $mydb->selectall_hashref(qq{ DESC $class }, 'Field');
+our $fieldDef = $mydb->selectall_hashref(qq{ DESC `$class` }, 'Field');
 
 our $out = {
 	$class => []
@@ -92,22 +130,66 @@ Sort out columns which we will output
 
 my %kDefined = map { $_ => 1 } keys %$fieldDef;
 
+sub findDBParams {
+	our $opt;
+	use Config::Simple;
+	my %db;
+
+	if ( -f 'db.cfg' ) {
+		Config::Simple->import_from('db.cfg', \%db);
+		for (keys %db) {
+			s/^default\.// for (my $okey = $_);
+			$opt->{"--$okey"} = $db{$_};
+		}
+	}
+}
+
+sub addUserColumn {
+	my ($col, $type, $len) = @_;
+	$fieldDef->{$col} ||= {};
+	if ($type) {
+		$fieldDef->{$col}->{'UserType'} = $type;
+	}
+	if ($len) {
+		$fieldDef->{$col}->{'UserLen'} = $len;
+	}
+	$kDefined{$col} = 1;
+	our @keys = sort keys %kDefined;
+}
+
+
 if ($opt->{'--columns'}) {
 	my @col = split(',', $opt->{'--columns'});
 	for my $c (@col) {
 		my ($cn, $ct, $len) = split(':', $c);
-		$fieldDef->{$cn} ||= {};
-		if ($ct) {
-			$fieldDef->{$cn}->{'UserType'} = $ct;
-		}
-		if ($len) {
-			$fieldDef->{$cn}->{'UserLen'} = $len;
-		}
-		$kDefined{$cn} = 1;
+		addUserColumn($cn, $ct, $len);
 	}
 }
+
+if ($opt->{'--maptable'}) {
+	%relMap = map { my ($fld, $type) = split(':',$_); $fld => ($type||'Text'); } split(',', $opt->{'--maptable'});
+}
+
+if ($opt->{'--many'}) {
+	%manyMap = map { my ($c,$n) = split(':',$_); $c => ($n||1); } split(',', $opt->{'--many'});
+	for (keys %manyMap) {
+		my $pl = $_;
+		$pl =~ s/ies$/y/;
+		$pl =~ s/es$//;
+		$pl =~ s/s$//;
+		$relMap{$_} = $pl;
+	}
+	$kDefined{$_} = 1 for keys %manyMap;
+	if ($opt->{'--include'}) {
+		$opt->{'--include'} .= ",$_" for keys %manyMap;
+	}
+	print STDERR "# Many_many map:\n", Dumper(\%manyMap) if $VERBOSE;
+}
+
+print STDERR "# FieldType->Table map:\n", Dumper(\%relMap) if $VERBOSE;
+
 delete $kDefined{ID};
-my @keys = sort keys %kDefined;
+@keys = sort keys %kDefined;
 
 if ($opt->{'--include'}) {
 	my %col = map { $_ => 1 } split(',', $opt->{'--include'});
@@ -118,24 +200,55 @@ if ($opt->{'--exclude'}) {
 	@keys = grep { !$col{$_} } @keys;
 }
 
-if ($opt->{'--maptable'}) {
-	my @col = split(',', $opt->{'--maptable'});
-	for my $c (@col) {
-		my ($fld, $type) = split(':', $c);
-		$relMap{$fld} = $type;
+
+if ($opt->{'--relfilter'}) {
+	%filters = map { my ($fld,$filt);
+		/^\s*([^:]+):(.+)\s*$/ && do {
+			($fld, $filt) = ($1,$2);
+		};
+		$fld => $filt || '';
+	} split(',', $opt->{'--relfilter'});
+	print STDERR "# Rel Filters:\n", Dumper(\%filters) if $VERBOSE;
+}
+
+if ($opt->{'--imgdir'}) {
+	my %dirs = map { my ($f,$d) = split(':', $_); $f => $d; } split(',', $opt->{'--imgdir'});
+	for (keys %dirs) {
+		my $sql = '';
+		if ($filters{$_}) {
+			$sql = $filters{$_} . ' AND ';
+		}
+		$sql .= "Filename LIKE '%/$dirs{$_}/%'";
+		$filters{$_} = $sql;
 	}
 }
 
-print STDERR Dumper(\$fieldDef) if $VERBOSE;
-print STDERR Dumper(\@keys) if $VERBOSE;
+print STDERR "# Field defs:\n", Dumper(\$fieldDef) if $VERBOSE;
+print STDERR "# Fields to output:\n", Dumper(\@keys) if $VERBOSE;
+
+print STDERR "# Setting values:\n" if $VERBOSE;
+
+$typeMap{$_} = fieldType($fieldDef, $_) for @keys;
 
 for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
 	my $obj = {};
 FIELD: for my $field (@keys) {
-		my $func = 'rand' . fieldType($fieldDef, $field);
-		printf STDERR ("[%20s] (%s)\n", $field, $func) if $VERBOSE;
-		my $val = eval { &$func($field, fieldLen($fieldDef, $field)) };
-		$obj->{$field} = $val;
+		my $func = 'rand' . $typeMap{$field};
+		my $val;
+		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
+		if ($manyMap{$field}) {
+			my @rels = ();
+			my $fieldLen = fieldLen($fieldDef, $field);
+			for(my $j=0; $j < $manyMap{$field}; $j++) {
+				my $val = eval { &$func($field, $fieldLen) };
+				push @rels, $val if $val;
+			}
+			$obj->{$field} = join(',', @rels);
+			print "# Type map:\n",Dumper(\%typeMap) if $VERBOSE;
+		} else {
+			$val = eval { &$func($field, fieldLen($fieldDef, $field)) };
+			$obj->{$field} = $val;
+		}
 	}
 	push @{$out->{$class}}, $obj;
 }
@@ -149,6 +262,7 @@ sub fieldType {
 	my ($fieldDef, $fld) = @_;
 	if ($fieldDef->{$fld}) {
 		if ($fieldDef->{$fld}->{UserType}) {
+			print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
 			return $fieldDef->{$fld}->{UserType};
 		}
 		# Spec cases.
@@ -156,11 +270,11 @@ sub fieldType {
 			/^Content$/ && do { return 'HtmlText' };
 			/^Email$/ && do { return 'Email' };
 			/^Title$/ && do { return 'Phrase' };
-			/Name/i && do { return 'Name'; };
+			/Name$/i && do { return 'Name'; };
 			/Image.*ID$/ && do { return 'Image'; };
 			/ID$/ && do { return 'Reln'; };
 		}
-
+		
 		unless ($fieldDef->{$fld}->{Type}) {
 			return 'Text';
 		}
@@ -174,6 +288,10 @@ sub fieldType {
 			/^timestamp/ && do { return 'Timestamp'; };
 		}
 	}
+	our $manyMap;
+	if ($manyMap{$fld}) {
+		return 'Reln';
+	}	
 	return 'Text';
 }
 
@@ -207,11 +325,12 @@ sub ipsum {
 		$lorem = <DATA>;
 		$lorem =~ s/\n+//g;
 	}
-	my @sentences = split(/[,.]\s+/, $lorem);
+	my @sentences = split(/\.\s+/, $lorem);
 	my $idx = int(rand((scalar @sentences)/2));
 	my $text = '';
 	while(length($text) < $len && $idx < scalar @sentences) {
 		my $line = $sentences[$idx];
+		$line .= '.';
 		if (length($text) + length($line) < $len) {
 			if ($breaks && (rand() < 0.3)) {
 				$text .= ($html ? '</p><p>' : "\n\n");
@@ -227,9 +346,11 @@ sub ipsum {
 our @words;
 
 sub getWords {
+	my ($file) = @_;
+	$file ||= '/etc/dictionaries-common/words';
 	our @words;
 	unless(@words) {
-		open (my $fh, '<', '/etc/dictionaries-common/words')
+		open (my $fh, '<', $file)
 			or croak $!;
 		local $/;
 		@words = split("\n", <$fh>);
@@ -254,11 +375,12 @@ sub randText {
 
 sub randName {
 	my ($fld, $chars, $words) = @_;
-	$chars ||= 30;
+	$chars ||= 20;
 	$words ||= $chars / 5;
 	my $text = '';
+	my $shortWordsFile = dirname($0) . '/shortwords.txt';
 	for(my $i=0; length($text) < $chars && $i < $words; $i++) {
-		$text .= ' ' . ucfirst(getWords());
+		$text .= ' ' . ucfirst(getWords($shortWordsFile));
 	}
 	$text =~ s/[^\w\s]//g;
 	$text =~ s/^\s+|\s+$//;
@@ -295,16 +417,21 @@ sub randReln {
 		$table = $relMap{$table};
 	}
 	eval {
-		my $tblDef = $mydb->selectall_hashref(qq{ DESC $table }, 'Field');
+		my $tblDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
 		return unless $tblDef;
-		my $img = $mydb->selectrow_hashref(qq{ SELECT ID FROM $table ORDER BY RAND() LIMIT 1 });
+		my $where = $filters{$fld} || '';
+		$where = 'WHERE ' . $where if $where;
+		my $img = $mydb->selectrow_hashref(qq{ SELECT ID FROM `$table` $where ORDER BY RAND() LIMIT 1 });
 		return $img->{ID};
 	}
 }
 
 sub randImage {
 	our $mydb;
-	my $img = $mydb->selectrow_hashref(q{ SELECT ID FROM File WHERE ClassName='Image' ORDER BY RAND() LIMIT 1 });
+	my ($fld) = @_;
+	my $where = $filters{$fld} || '';
+	$where = ' AND ' . $where if $where;
+	my $img = $mydb->selectrow_hashref(qq{ SELECT ID FROM \`File\` WHERE ClassName='Image' $where ORDER BY RAND() LIMIT 1 });
 	return $img->{ID};
 }
 
@@ -324,6 +451,12 @@ sub randTimestamp {
 	return	UnixDate(ParseDate("$nd days $fp"), '%o');
 }
 
+sub randStatic {
+	# Not really  random!
+	my ($fld) = @_;
+	my $val = fieldLen($fieldDef, $fld);
+	return $val;
+}
 
 sub randEnum {
 	my ($fld) = @_;
