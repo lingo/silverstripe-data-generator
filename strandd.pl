@@ -58,7 +58,7 @@ our $opt = Getopt::Declare->new(q'
 	--include <COLSPEC>		Only include these columns in the output
 	-i <COLSPEC>			[ditto]
 
-	--maptable <TMAP>		Map relation to table. form is  FieldName:DBTable  eg  Author:Member, or Page:SiteTree
+	--maptable <TMAP>		Map relation to table. form is  FieldName:DBTable  eg  AuthorID:Member, or PageID:SiteTree
 
 	--many <COLSPEC>		Which columns are has_many or many_many.  Format is  COLNAME:MAXREL
 							E.g.  --many Tags:5 will create up to 5 tag relations.
@@ -69,6 +69,8 @@ our $opt = Getopt::Declare->new(q'
 
 	--imgdir <DIR>			Special case of --relfilter for random Images.  Allows you to limit random images to those coming from DIR.
 							E.g.  --imgdir AvatarID:avatars  would map to images within  <sstr_dir>/assets/avatars/
+
+	--inherit <TABLE>		Inherit fields from TABLE
 
 	Miscellaneous options
 	=====================
@@ -115,6 +117,13 @@ if ($opt->{'--debug'}) {
 
 our $class = $opt->{'<CLASS>'};
 our $fieldDef = $mydb->selectall_hashref(qq{ DESC `$class` }, 'Field');
+if ($opt->{'--inherit'}) {
+	my $table = $opt->{'--inherit'};
+	my $parDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
+	for (keys %$parDef) {
+		$fieldDef->{$_} ||= $parDef->{$_};
+	}
+}
 
 our $out = {
 	$class => []
@@ -234,6 +243,10 @@ for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
 	my $obj = {};
 FIELD: for my $field (@keys) {
 		my $func = 'rand' . $typeMap{$field};
+		if (!defined(&$func)) {
+			$func = 'randReln';
+			$relMap{$field} ||= $typeMap{$field};
+		}
 		my $val;
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
 		if ($manyMap{$field}) {
@@ -413,8 +426,8 @@ sub randReln {
 	our $mydb;
 	my $table = $fld;
 	$table =~ s/ID$//;
-	if ($relMap{$table}) {
-		$table = $relMap{$table};
+	if ($relMap{$fld}) {
+		$table = $relMap{$fld};
 	}
 	eval {
 		my $tblDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
