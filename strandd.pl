@@ -1,4 +1,20 @@
 #!/usr/bin/perl
+
+=pod SUMMARY
+
+Generate random data for a SilverStripe site.
+Use --help for more information
+
+Example:
+
+  strandd.pl Page 10 --inherit SiteTree --include Title:Phrase:20,Content,Created
+
+=pod AUTHOR
+
+Luke Hudson <lukeletters@gmail.com>
+
+=cut
+
 use warnings;
 use strict;
 no strict 'refs';
