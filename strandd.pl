@@ -444,6 +444,9 @@ sub addUserColumn {
 		$fieldDef->{$col}->{'UserLen'} = $len;
 	}
 	$kDefined{$col} = 1;
+	if ($opt->{'--include'}) {
+		$opt->{'--include'} .= ",$col";
+	}
 	@keys = sort keys %kDefined;
 }
 
