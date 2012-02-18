@@ -7,7 +7,7 @@ Use --help for more information
 
 Example:
 
-  strandd.pl Page 10 --inherit SiteTree --include Title:Phrase:20,Content,Created
+  strandd.pl Page 10 --inherit SiteTree --include Title:Title:20,Content,Created
 
 =pod AUTHOR
 
@@ -58,7 +58,7 @@ our $opt = Getopt::Declare->new(q'
 								Num - Int
 								HtmlText - Lorem ipsum with <p> tags
 								Text - Lorem ipsum with \n
-								Phrase - Words from /etc/dictionaries-common/words combined by spaces
+								Title - Words from /etc/dictionaries-common/words combined by spaces
 								Email - Words from same file, made into email
 								Reln -- Random relation ID from DB table.  See also --maptable
 								Image -- Random image from File table
@@ -298,7 +298,7 @@ sub fieldType {
 		for($fld) {
 			/^Content$/ && do { return 'HtmlText' };
 			/^Email$/ && do { return 'Email' };
-			/^Title$/ && do { return 'Phrase' };
+			/^Title$/ && do { return 'Title' };
 			/Name$/i && do { return 'Name'; };
 			/Image.*ID$/ && do { return 'Image'; };
 			/ID$/ && do { return 'Reln'; };
@@ -407,7 +407,7 @@ sub randName {
 	$chars ||= 20;
 	$words ||= $chars / 5;
 	my $text = '';
-	my $shortWordsFile = dirname($0) . '/shortwords.txt';
+	my $shortWordsFile = dirname($0) . '/names.txt';
 	for(my $i=0; length($text) < $chars && $i < $words; $i++) {
 		$text .= ' ' . ucfirst(getWords($shortWordsFile));
 	}
@@ -416,7 +416,7 @@ sub randName {
 	return $text;
 }
 
-sub randPhrase {
+sub randTitle {
 	my ($fld, $chars) = @_;
 	$chars ||= 30;
 	my $text = '';
