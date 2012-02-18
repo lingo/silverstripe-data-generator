@@ -203,7 +203,7 @@ FIELD: for my $field (@keys) {
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
 		if ($manyMap{$field}) {
 			@rels = ();
-			$fieldLen = fieldLen($fieldDef, $field);
+			$fieldLen = fieldLen($field);
 			$count = $manyMap{$field};
 			for(my $j=0; $j < $manyMap{$field}; $j++) {
 				$val = eval { &$func($field, $fieldLen) };
@@ -211,7 +211,7 @@ FIELD: for my $field (@keys) {
 			}
 			$obj->{$field} = join(',', @rels);
 		} else {
-			$val = eval { &$func($field, fieldLen($fieldDef, $field)) };
+			$val = eval { &$func($field, fieldLen($field)) };
 			$obj->{$field} = $val;
 		}
 	}
@@ -269,10 +269,12 @@ sub fieldLen {
 		if ($def->{UserLen}) {
 			return $def->{UserLen};
 		}
-		for($fld) { # Special cases
-			/^Title$/ && do { return 30; };
+		for($fld) { # Convenience cases
+			/^Title$/ && do { return 20; };
 			/^MenuTitle$/ && do { return 30; };
 			/^URLSegment$/ && do { return 16; };
+			/^FirstName/ && do { return 15; };
+			/^Surname/ && do { return 20; };
 		}
 		if ($def->{Type} && $def->{Type} =~ /^\w+\((\d+)\)/) {
 			return $1;
@@ -432,7 +434,7 @@ sub randTimestamp {
 sub randStatic {
 	# Not really  random!
 	my ($fld) = @_;
-	my $val = fieldLen($fieldDef, $fld);
+	my $val = fieldLen($fld);
 	return $val;
 }
 
