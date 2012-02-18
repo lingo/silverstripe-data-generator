@@ -162,7 +162,7 @@ processImgDir();
 delete $kDefined{ID};
 @keys = sort keys %kDefined;
 
-print STDERR "Field summary: \n";
+print STDERR "Field summary: \n" if $VERBOSE;
 for (@keys) {
 	my $type = fieldType($_);
 	my $func = 'rand' . $type;
