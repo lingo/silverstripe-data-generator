@@ -261,7 +261,7 @@ FIELD: for my $field (@keys) {
 		my $func = 'rand' . $typeMap{$field};
 		if (!defined(&$func)) {
 			$func = 'randReln';
-			$relMap{$field} ||= $typeMap{$field};
+			$relMap{$field} = $typeMap{$field};
 		}
 		my $val;
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
@@ -357,14 +357,17 @@ sub ipsum {
 	my @sentences = split(/\.\s+/, $lorem);
 	my $idx = int(rand((scalar @sentences)/2));
 	my $text = '';
-	while(length($text) < $len && $idx < scalar @sentences) {
-		my $line = $sentences[$idx];
+	my ($tlen, $llen, $line) = (0,0);
+	while($tlen < $len && $idx < scalar @sentences) {
+		$line = $sentences[$idx];
+		$llen = length($line);
 		$line .= '.';
-		if (length($text) + length($line) < $len) {
+		if ($tlen + $llen < $len) {
 			if ($breaks && (rand() < 0.3)) {
 				$text .= ($html ? '</p><p>' : "\n\n");
 			}
 			$text .= ucfirst($line);
+			$tlen = length($text);
 		}
 		++$idx;
 	}
@@ -408,8 +411,13 @@ sub randName {
 	$words ||= $chars / 5;
 	my $text = '';
 	my $shortWordsFile = dirname($0) . '/names.txt';
-	for(my $i=0; length($text) < $chars && $i < $words; $i++) {
-		$text .= ' ' . ucfirst(getWords($shortWordsFile));
+	my $len = 0;
+	my ($word, $wl);
+	for(my $i=0; $len < $chars && $i < $words; $i++) {
+		$word = ucfirst(getWords($shortWordsFile));
+		$wl = length($word);
+		$text .= ' ' . $word if $len+$wl < $chars;
+		$len += $wl + 1;
 	}
 	$text =~ s/[^\w\s]//g;
 	$text =~ s/^\s+|\s+$//;
@@ -420,8 +428,12 @@ sub randTitle {
 	my ($fld, $chars) = @_;
 	$chars ||= 30;
 	my $text = '';
-	for(my $i=0; length($text) < $chars; $i++) {
-		$text .= ' ' . getWords();
+	my ($len, $word, $wl) = (0);
+	for(my $i=0; $len < $chars; $i++) {
+		$word = getWords();
+		$wl = length($word);
+		$text .= ' ' . $word if $wl + $len < $chars;
+		$len += $wl + 1;
 	}
 	$text =~ s/^\s+|\s+$//;
 	return ucfirst $text;
