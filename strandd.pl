@@ -548,6 +548,10 @@ sub processColumns {
 		my @col = split(',', $opt->{'--columns'});
 		for my $c (@col) {
 			my ($cn, $ct, $len) = split(':', $c);
+			if (!$len && int($ct) eq $ct) {
+				$len = $ct;
+				$ct = fieldType($cn);
+			}
 			addUserColumn($cn, $ct, $len);
 		}
 	}
