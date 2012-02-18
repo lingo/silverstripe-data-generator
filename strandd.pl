@@ -121,6 +121,7 @@ our %relMap = (); # For randReln and --maptype
 our %filters = (); # see --relfilter
 our %manyMap = (); # for --many
 our @keys;
+our %tableDefCache = (); #save DB DESC calls
 
 findDBParams() # Look for stored DB params in config file (db.cfg)
 	or croak "No database connection information provided. See --help";
@@ -135,7 +136,7 @@ if ($opt->{'--debug'}) {
 
 # Class and field info for that class
 our $class = $opt->{'<CLASS>'};
-our $fieldDef = $mydb->selectall_hashref(qq{ DESC `$class` }, 'Field');
+our $fieldDef = descTable($class);
 
 our $out = {
 	$class => []
@@ -174,6 +175,9 @@ for (@keys) {
 		$table = '[DB: ' . getTable($_) . '] ';
 	}
 	print STDERR "$_ => [$type] => \&$func $table\n" if $VERBOSE;
+	undef $type;
+	undef $func;
+	undef $table;
 }
 
 print STDERR "# Field defs (fieldDef):\n", Dumper(\$fieldDef) if $VERBOSE;
@@ -185,23 +189,27 @@ print STDERR "# Many map:\n", Dumper(\%manyMap) if $VERBOSE;
 
 print STDERR "# Setting values:\n" if $VERBOSE;
 
+undef %kDefined;
+
+my ($val, @rels, $fieldLen, $count);
 
 # Loop NUM times creating objects
 OBJECT: for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
 	my $obj = {};
 FIELD: for my $field (@keys) {
 		my $func = 'rand' . fieldType($field);
-		my $val;
+		croak unless defined(&$func);
+
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
 		if ($manyMap{$field}) {
-			my @rels = ();
-			my $fieldLen = fieldLen($fieldDef, $field);
+			@rels = ();
+			$fieldLen = fieldLen($fieldDef, $field);
+			$count = $manyMap{$field};
 			for(my $j=0; $j < $manyMap{$field}; $j++) {
-				my $val = eval { &$func($field, $fieldLen) };
+				$val = eval { &$func($field, $fieldLen) };
 				push @rels, $val if $val;
 			}
 			$obj->{$field} = join(',', @rels);
-			print "# Type map:\n",Dumper(\%typeMap) if $VERBOSE;
 		} else {
 			$val = eval { &$func($field, fieldLen($fieldDef, $field)) };
 			$obj->{$field} = $val;
@@ -219,9 +227,10 @@ sub fieldType {
 	my ($fld) = @_;
 	croak "NO FIELD" unless $fld;
 	if ($fieldDef->{$fld}) {
-		if ($fieldDef->{$fld}->{UserType}) {
+		my $def = $fieldDef->{$fld};
+		if ($def->{UserType}) {
 			#print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
-			return $fieldDef->{$fld}->{UserType};
+			return $def->{UserType};
 		}
 		# Spec cases.
 		for($fld) {
@@ -233,11 +242,11 @@ sub fieldType {
 			/ID$/ && do { return 'Reln'; };
 		}
 		
-		unless ($fieldDef->{$fld}->{Type}) {
+		unless ($def->{Type}) {
 			return 'Text';
 		}
 
-		for($fieldDef->{$fld}->{Type}) {
+		for($def->{Type}) {
 			/^enum/ && do { return 'Enum'; };
 			/^int/ && do { return 'Num'; };
 			/^(varchar|text|mediumtext|char)/ && do { return 'Text'; };
@@ -249,26 +258,27 @@ sub fieldType {
 	if ($manyMap{$fld}) {
 		return 'Reln';
 	}	
+	print "No fieldDef\n";
 	return 'Text';
 }
 
 sub fieldLen {
-	my ($fieldDef, $fld) = @_;
-	if ($fieldDef->{$fld}->{UserLen}) {
-		return $fieldDef->{$fld}->{UserLen};
+	my ($fld) = @_;
+	if ($fieldDef->{$fld}) {
+		my $def = $fieldDef->{$fld};
+		if ($def->{UserLen}) {
+			return $def->{UserLen};
+		}
+		for($fld) { # Special cases
+			/^Title$/ && do { return 30; };
+			/^MenuTitle$/ && do { return 30; };
+			/^URLSegment$/ && do { return 16; };
+		}
+		if ($def->{Type} && $def->{Type} =~ /^\w+\((\d+)\)/) {
+			return $1;
+		}
 	}
-	for($fld) { # Special cases
-		/^Title$/ && do { return 30; };
-		/^MenuTitle$/ && do { return 30; };
-		/^URLSegment$/ && do { return 16; };
-	}
-	unless($fieldDef->{$fld} && $fieldDef->{$fld}->{Type}) {
-		return 512;
-	}
-	if ($fieldDef->{$fld}->{Type} =~ /^\w+\((\d+)\)/) {
-		return $1;
-	}
-	return 1024; # rand
+	return 128; # really I dunno why.
 }
 
 sub ipsum {
@@ -314,7 +324,9 @@ sub getWords {
 		local $/;
 		@words = split("\n", <$fh>);
 		close $fh;
+		undef $fh;
 	}
+	undef $file;
 	return $words[int(rand(@words))];
 }
 
@@ -348,6 +360,10 @@ sub randName {
 	}
 	$text =~ s/[^\w\s]//g;
 	$text =~ s/^\s+|\s+$//;
+	undef $shortWordsFile;
+	undef $len;
+	undef $word;
+	undef $wl;
 	return $text;
 }
 
@@ -380,7 +396,7 @@ sub randReln {
 	my ($fld) = @_;
 	my $table = getTable($fld);
 	eval {
-		my $tblDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
+		my $tblDef = descTable($table);
 		return unless $tblDef;
 		my $where = $filters{$fld} || '';
 		$where = 'WHERE ' . $where if $where;
@@ -450,6 +466,14 @@ sub addUserColumn {
 	@keys = sort keys %kDefined;
 }
 
+sub descTable {
+	my ($table) = @_;
+	unless ($tableDefCache{$table}) {
+		$tableDefCache{$table} = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
+	}
+	return $tableDefCache{$table};
+}
+
 sub connectDB {
 	return DBI->connect("DBI:mysql:host=localhost;database=$opt->{'--db'}",
 		$opt->{'--user'}, $opt->{'--pass'},
@@ -493,6 +517,14 @@ Option processing routines
 
 =cut
 
+# From http://www.perlmonks.org/?node_id=609478
+sub is_numeric {
+	use warnings FATAL => qw( numeric uninitialized );
+	local $@;
+	my $x = shift;
+	return eval { $x == $x };
+}
+
 sub processImgDir {
 	if ($opt->{'--imgdir'}) {
 		my %dirs = map { my ($f,$d) = split(':', $_); $f => $d; } split(',', $opt->{'--imgdir'});
@@ -509,20 +541,15 @@ sub processImgDir {
 
 
 sub processRelFilter {
-	if ($opt->{'--many'}) {
-		%manyMap = map { my ($c,$n) = split(':',$_); $c => ($n||1); } split(',', $opt->{'--many'});
-		for (keys %manyMap) {
-			my $pl = $_;
-			$pl =~ s/ies$/y/;
-			$pl =~ s/es$//;
-			$pl =~ s/s$//;
-			$relMap{$_} = $pl;
-		}
-		$kDefined{$_} = 1 for keys %manyMap;
-		if ($opt->{'--include'}) {
-			$opt->{'--include'} .= ",$_" for keys %manyMap;
-		}
-		print STDERR "# Many_many map:\n", Dumper(\%manyMap) if $VERBOSE;
+	if ($opt->{'--relfilter'}) {
+		%filters = map {
+			my ($fld,$filt);
+			/^\s*([^:]+):(.+)\s*$/ && do {
+				($fld, $filt) = ($1,$2);
+			};
+			$fld => $filt || '';
+		} split(',', $opt->{'--relfilter'});
+		print STDERR "# Rel Filters:\n", Dumper(\%filters) if $VERBOSE;
 	}
 }
 
@@ -551,7 +578,7 @@ sub processColumns {
 		my @col = split(',', $opt->{'--columns'});
 		for my $c (@col) {
 			my ($cn, $ct, $len) = split(':', $c);
-			if (!$len && int($ct) eq $ct) {
+			if (!$len && is_numeric($ct)) {
 				$len = $ct;
 				$ct = fieldType($cn);
 			}
@@ -563,7 +590,7 @@ sub processColumns {
 sub processInherit {
 	if ($opt->{'--inherit'}) {
 		my $table = $opt->{'--inherit'};
-		my $parDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
+		my $parDef = descTable($table);
 		for (keys %$parDef) {
 			$fieldDef->{$_} ||= $parDef->{$_};
 		}
@@ -572,7 +599,9 @@ sub processInherit {
 
 sub processMany {
 	if ($opt->{'--many'}) {
+		# Break up command args
 		%manyMap = map { my ($c,$n) = split(':',$_); $c => ($n||1); } split(',', $opt->{'--many'});
+		# Guess singular from plural names
 		for (keys %manyMap) {
 			my $pl = $_;
 			$pl =~ s/ies$/y/;
