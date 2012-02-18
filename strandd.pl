@@ -108,44 +108,38 @@ our $opt = Getopt::Declare->new(q'
 ');
 croak unless $opt;
 
+our $VERBOSE = $opt->{'--verbose'};
+
+# Handle option aliases
 $opt->{'--include'} ||= $opt->{'-i'};
 $opt->{'--exclude'} ||= $opt->{'-x'};
 $opt->{'--columns'} ||= $opt->{'-c'};
 
+# Global vars
 our %typeMap = ();
 our %relMap = (); # For randReln and --maptype
 our %filters = (); # see --relfilter
 our %manyMap = (); # for --many
 our @keys;
 
-findDBParams(); # Look for stored DB params
+findDBParams() # Look for stored DB params in config file (db.cfg)
+	or croak "No database connection information provided. See --help";
 
 # Connect to DB
-our $mydb = DBI->connect("DBI:mysql:host=localhost;database=$opt->{'--db'}",
-		$opt->{'--user'}, $opt->{'--pass'},
-		{RaiseError=>0, PrintError=>1
-		}
-	) or croak;
+our $mydb = connectDB()
+	or croak "Cant connect to DB : $!";
 
 if ($opt->{'--debug'}) {
 	$mydb->{TraceLevel} = '0|SQL';
 }
 
+# Class and field info for that class
 our $class = $opt->{'<CLASS>'};
 our $fieldDef = $mydb->selectall_hashref(qq{ DESC `$class` }, 'Field');
-if ($opt->{'--inherit'}) {
-	my $table = $opt->{'--inherit'};
-	my $parDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
-	for (keys %$parDef) {
-		$fieldDef->{$_} ||= $parDef->{$_};
-	}
-}
 
 our $out = {
 	$class => []
 };
-
-our $VERBOSE = $opt->{'--verbose'};
 
 =pod
 
@@ -155,115 +149,48 @@ Sort out columns which we will output
 
 my %kDefined = map { $_ => 1 } keys %$fieldDef;
 
-sub findDBParams {
-	our $opt;
-	use Config::Simple;
-	my %db;
-
-	if ( -f 'db.cfg' ) {
-		Config::Simple->import_from('db.cfg', \%db);
-		for (keys %db) {
-			s/^default\.// for (my $okey = $_);
-			$opt->{"--$okey"} = $db{$_};
-		}
-	}
-}
-
-sub addUserColumn {
-	my ($col, $type, $len) = @_;
-	$fieldDef->{$col} ||= {};
-	if ($type) {
-		$type = ucfirst lc $type;
-		$fieldDef->{$col}->{'UserType'} = $type;
-	}
-	if ($len) {
-		$fieldDef->{$col}->{'UserLen'} = $len;
-	}
-	$kDefined{$col} = 1;
-	our @keys = sort keys %kDefined;
-}
-
-
-if ($opt->{'--columns'}) {
-	my @col = split(',', $opt->{'--columns'});
-	for my $c (@col) {
-		my ($cn, $ct, $len) = split(':', $c);
-		addUserColumn($cn, $ct, $len);
-	}
-}
-
-if ($opt->{'--maptable'}) {
-	%relMap = map { my ($fld, $type) = split(':',$_); $fld => ($type||'Text'); } split(',', $opt->{'--maptable'});
-}
-
-if ($opt->{'--many'}) {
-	%manyMap = map { my ($c,$n) = split(':',$_); $c => ($n||1); } split(',', $opt->{'--many'});
-	for (keys %manyMap) {
-		my $pl = $_;
-		$pl =~ s/ies$/y/;
-		$pl =~ s/es$//;
-		$pl =~ s/s$//;
-		$relMap{$_} = $pl;
-	}
-	$kDefined{$_} = 1 for keys %manyMap;
-	if ($opt->{'--include'}) {
-		$opt->{'--include'} .= ",$_" for keys %manyMap;
-	}
-	print STDERR "# Many_many map:\n", Dumper(\%manyMap) if $VERBOSE;
-}
-
-print STDERR "# FieldType->Table map:\n", Dumper(\%relMap) if $VERBOSE;
+processInherit();
+processColumns();
+processMapTable();
+processMany();
+processInclude();
+processExclude();
+processRelFilter();
+processImgDir();
 
 delete $kDefined{ID};
 @keys = sort keys %kDefined;
 
-if ($opt->{'--include'}) {
-	my %col = map { $_ => 1 } split(',', $opt->{'--include'});
-	@keys = grep { $col{$_} } @keys;
-}
-if ($opt->{'--exclude'}) {
-	my %col = map { $_ => 1 } split(',', $opt->{'--exclude'});
-	@keys = grep { !$col{$_} } @keys;
-}
-
-
-if ($opt->{'--relfilter'}) {
-	%filters = map { my ($fld,$filt);
-		/^\s*([^:]+):(.+)\s*$/ && do {
-			($fld, $filt) = ($1,$2);
-		};
-		$fld => $filt || '';
-	} split(',', $opt->{'--relfilter'});
-	print STDERR "# Rel Filters:\n", Dumper(\%filters) if $VERBOSE;
-}
-
-if ($opt->{'--imgdir'}) {
-	my %dirs = map { my ($f,$d) = split(':', $_); $f => $d; } split(',', $opt->{'--imgdir'});
-	for (keys %dirs) {
-		my $sql = '';
-		if ($filters{$_}) {
-			$sql = $filters{$_} . ' AND ';
-		}
-		$sql .= "Filename LIKE '%/$dirs{$_}/%'";
-		$filters{$_} = $sql;
+print STDERR "Field summary: \n";
+for (@keys) {
+	my $type = fieldType($_);
+	my $func = 'rand' . $type;
+	if (!defined(&$func)) {
+		$relMap{$_} = $type;
+		$typeMap{$_} = 'Reln';
 	}
+	my $table = '';
+	if ($typeMap{$_} && $typeMap{$_} eq 'Reln') {
+		$table = '[DB: ' . getTable($_) . '] ';
+	}
+	print STDERR "$_ => [$type] => \&$func $table\n" if $VERBOSE;
 }
 
-print STDERR "# Field defs:\n", Dumper(\$fieldDef) if $VERBOSE;
-print STDERR "# Fields to output:\n", Dumper(\@keys) if $VERBOSE;
+print STDERR "# Field defs (fieldDef):\n", Dumper(\$fieldDef) if $VERBOSE;
+print STDERR "# Fields to output (keys):\n", Dumper(\@keys) if $VERBOSE;
+print STDERR "# Table mapping (relMap):\n", Dumper(\%relMap) if $VERBOSE;
+print STDERR "# Type map: (typeMap)\n", Dumper(\%typeMap) if $VERBOSE;
+print STDERR "# Rel filters:\n", Dumper(\%filters) if $VERBOSE;
+print STDERR "# Many map:\n", Dumper(\%manyMap) if $VERBOSE;
 
 print STDERR "# Setting values:\n" if $VERBOSE;
 
-$typeMap{$_} = fieldType($fieldDef, $_) for @keys;
 
-for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
+# Loop NUM times creating objects
+OBJECT: for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
 	my $obj = {};
 FIELD: for my $field (@keys) {
-		my $func = 'rand' . $typeMap{$field};
-		if (!defined(&$func)) {
-			$func = 'randReln';
-			$relMap{$field} = $typeMap{$field};
-		}
+		my $func = 'rand' . fieldType($field);
 		my $val;
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
 		if ($manyMap{$field}) {
@@ -289,10 +216,11 @@ $mydb->disconnect();
 #print "Done.\n";
 
 sub fieldType {
-	my ($fieldDef, $fld) = @_;
+	my ($fld) = @_;
+	croak "NO FIELD" unless $fld;
 	if ($fieldDef->{$fld}) {
 		if ($fieldDef->{$fld}->{UserType}) {
-			print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
+			#print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
 			return $fieldDef->{$fld}->{UserType};
 		}
 		# Spec cases.
@@ -318,7 +246,6 @@ sub fieldType {
 			/^timestamp/ && do { return 'Timestamp'; };
 		}
 	}
-	our $manyMap;
 	if ($manyMap{$fld}) {
 		return 'Reln';
 	}	
@@ -381,7 +308,6 @@ our @words;
 sub getWords {
 	my ($file) = @_;
 	$file ||= '/etc/dictionaries-common/words';
-	our @words;
 	unless(@words) {
 		open (my $fh, '<', $file)
 			or croak $!;
@@ -452,12 +378,7 @@ sub randEmail {
 
 sub randReln {
 	my ($fld) = @_;
-	our $mydb;
-	my $table = $fld;
-	$table =~ s/ID$//;
-	if ($relMap{$fld}) {
-		$table = $relMap{$fld};
-	}
+	my $table = getTable($fld);
 	eval {
 		my $tblDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
 		return unless $tblDef;
@@ -469,7 +390,6 @@ sub randReln {
 }
 
 sub randImage {
-	our $mydb;
 	my ($fld) = @_;
 	my $where = $filters{$fld} || '';
 	$where = ' AND ' . $where if $where;
@@ -502,7 +422,6 @@ sub randStatic {
 
 sub randEnum {
 	my ($fld) = @_;
-	our $fieldDef;
 	if ($fieldDef->{$fld}->{Type} && 
 		$fieldDef->{$fld}->{Type} =~ /^enum/) {
 
@@ -512,6 +431,156 @@ sub randEnum {
 		return $endef->[int(rand(@$endef))];
 	}
 }
+
+
+sub addUserColumn {
+	my ($col, $type, $len) = @_;
+	$fieldDef->{$col} ||= {};
+	if ($type) {
+		$type = ucfirst lc $type;
+		$fieldDef->{$col}->{'UserType'} = $type;
+	}
+	if ($len) {
+		$fieldDef->{$col}->{'UserLen'} = $len;
+	}
+	$kDefined{$col} = 1;
+	@keys = sort keys %kDefined;
+}
+
+sub connectDB {
+	return DBI->connect("DBI:mysql:host=localhost;database=$opt->{'--db'}",
+		$opt->{'--user'}, $opt->{'--pass'},
+		{RaiseError=>0, PrintError=>1
+		}
+	)
+}
+
+sub findDBParams {
+	use Config::Simple;
+	my %db;
+
+	if ( -f 'db.cfg' ) {
+		Config::Simple->import_from('db.cfg', \%db);
+		for (keys %db) {
+			s/^default\.// for (my $okey = $_);
+			$opt->{"--$okey"} = $db{$_};
+		}
+		return 1;
+	}
+}
+
+sub getTable {
+	my ($field) = @_;
+
+	my $table = $field;
+	$table =~ s/ID$//;
+
+	if ($relMap{$field}) {
+		$table = $relMap{$field};
+	}
+	if (fieldType($field) eq 'Image') {
+		return 'File';
+	}
+	return $table;
+}
+
+=pod
+
+Option processing routines
+
+=cut
+
+sub processImgDir {
+	if ($opt->{'--imgdir'}) {
+		my %dirs = map { my ($f,$d) = split(':', $_); $f => $d; } split(',', $opt->{'--imgdir'});
+		for (keys %dirs) {
+			my $sql = '';
+			if ($filters{$_}) {
+				$sql = $filters{$_} . ' AND ';
+			}
+			$sql .= "Filename LIKE '%/$dirs{$_}/%'";
+			$filters{$_} = $sql;
+		}
+	}
+}
+
+
+sub processRelFilter {
+	if ($opt->{'--many'}) {
+		%manyMap = map { my ($c,$n) = split(':',$_); $c => ($n||1); } split(',', $opt->{'--many'});
+		for (keys %manyMap) {
+			my $pl = $_;
+			$pl =~ s/ies$/y/;
+			$pl =~ s/es$//;
+			$pl =~ s/s$//;
+			$relMap{$_} = $pl;
+		}
+		$kDefined{$_} = 1 for keys %manyMap;
+		if ($opt->{'--include'}) {
+			$opt->{'--include'} .= ",$_" for keys %manyMap;
+		}
+		print STDERR "# Many_many map:\n", Dumper(\%manyMap) if $VERBOSE;
+	}
+}
+
+sub processExclude {
+	if ($opt->{'--exclude'}) {
+		delete $kDefined{$_} for (split(',', $opt->{'--include'}));
+	}
+}
+
+
+sub processInclude {
+	if ($opt->{'--include'}) {
+		%kDefined = ();
+		$kDefined{$_} = 1 for (split(',', $opt->{'--include'}));
+	}
+}
+
+sub processMapTable {
+	if ($opt->{'--maptable'}) {
+		%relMap = map { my ($fld, $type) = split(':',$_); $fld => ($type||'Text'); } split(',', $opt->{'--maptable'});
+	}
+}
+
+sub processColumns {
+	if ($opt->{'--columns'}) {
+		my @col = split(',', $opt->{'--columns'});
+		for my $c (@col) {
+			my ($cn, $ct, $len) = split(':', $c);
+			addUserColumn($cn, $ct, $len);
+		}
+	}
+}
+
+sub processInherit {
+	if ($opt->{'--inherit'}) {
+		my $table = $opt->{'--inherit'};
+		my $parDef = $mydb->selectall_hashref(qq{ DESC `$table` }, 'Field');
+		for (keys %$parDef) {
+			$fieldDef->{$_} ||= $parDef->{$_};
+		}
+	}
+}
+
+sub processMany {
+	if ($opt->{'--many'}) {
+		%manyMap = map { my ($c,$n) = split(':',$_); $c => ($n||1); } split(',', $opt->{'--many'});
+		for (keys %manyMap) {
+			my $pl = $_;
+			$pl =~ s/ies$/y/;
+			$pl =~ s/es$//;
+			$pl =~ s/s$//;
+			$relMap{$_} = $pl;
+		}
+		$kDefined{$_} = 1 for keys %manyMap;
+		if ($opt->{'--include'}) {
+			$opt->{'--include'} .= ",$_" for keys %manyMap;
+		}
+		print STDERR "# Many_many map:\n", Dumper(\%manyMap) if $VERBOSE;
+	}
+}
+
 __END__
 Lorem ipsum dolor sit amet, consectetur adipisicing elit, impedit voluptate
 deserunt blanditiis eligendi eos mollit, quis eu excepteur at, aliquam atque
