@@ -555,7 +555,7 @@ sub processRelFilter {
 
 sub processExclude {
 	if ($opt->{'--exclude'}) {
-		delete $kDefined{$_} for (split(',', $opt->{'--include'}));
+		delete $kDefined{$_} for (split(',', $opt->{'--exclude'}));
 	}
 }
 
