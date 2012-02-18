@@ -173,6 +173,7 @@ sub addUserColumn {
 	my ($col, $type, $len) = @_;
 	$fieldDef->{$col} ||= {};
 	if ($type) {
+		$type = ucfirst lc $type;
 		$fieldDef->{$col}->{'UserType'} = $type;
 	}
 	if ($len) {
@@ -296,7 +297,7 @@ sub fieldType {
 		}
 		# Spec cases.
 		for($fld) {
-			/^Content$/ && do { return 'HtmlText' };
+			/^Content$/ && do { return 'Htmltext' };
 			/^Email$/ && do { return 'Email' };
 			/^Title$/ && do { return 'Title' };
 			/Name$/i && do { return 'Name'; };
@@ -395,7 +396,7 @@ sub randNum {
 	return int(rand(1024));
 }
 
-sub randHtmlText {
+sub randHtmltext {
 	my ($fld, $len) = @_;
 	return ipsum($len, $len > 300, 1);
 }
