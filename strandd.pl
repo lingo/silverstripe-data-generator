@@ -197,8 +197,9 @@ my ($val, @rels, $fieldLen, $count);
 OBJECT: for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
 	my $obj = {};
 FIELD: for my $field (@keys) {
-		my $func = 'rand' . fieldType($field);
-		croak unless defined(&$func);
+		my $type = fieldType($field);
+		my $func = 'rand' . $type;
+		croak "Unkown field type $type" unless defined(&$func);
 
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
 		if ($manyMap{$field}) {
@@ -226,10 +227,14 @@ $mydb->disconnect();
 sub fieldType {
 	my ($fld) = @_;
 	croak "NO FIELD" unless $fld;
+	if ($typeMap{$fld}) {
+		return $typeMap{$fld};
+	}
+
 	if ($fieldDef->{$fld}) {
 		my $def = $fieldDef->{$fld};
 		if ($def->{UserType}) {
-			#print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
+			print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
 			return $def->{UserType};
 		}
 		# Spec cases.
@@ -315,21 +320,22 @@ sub ipsum {
 }
 
 
-our @words;
+our %words;
 
 sub getWords {
 	my ($file) = @_;
 	$file ||= '/etc/dictionaries-common/words';
-	unless(@words) {
+	my $words = $words{$file};
+	unless($words) {
 		open (my $fh, '<', $file)
 			or croak $!;
 		local $/;
-		@words = split("\n", <$fh>);
+		@{$words{$file}} = split("\n", <$fh>);
 		close $fh;
 		undef $fh;
 	}
 	undef $file;
-	return $words[int(rand(@words))];
+	return $words->[int(rand(@$words))];
 }
 
 sub randNum {
@@ -375,7 +381,7 @@ sub randTitle {
 	my $text = '';
 	my ($len, $word, $wl) = (0);
 	for(my $i=0; $len < $chars; $i++) {
-		$word = getWords();
+		$word = getWords() until $word;
 		$wl = length($word);
 		$text .= ' ' . $word if $wl + $len < $chars;
 		$len += $wl + 1;
