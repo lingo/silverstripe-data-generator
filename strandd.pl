@@ -116,6 +116,7 @@ $opt->{'--exclude'} ||= $opt->{'-x'};
 $opt->{'--columns'} ||= $opt->{'-c'};
 
 # Global vars
+our %words;
 our %typeMap = ();
 our %relMap = (); # For randReln and --maptype
 our %filters = (); # see --relfilter
@@ -320,22 +321,26 @@ sub ipsum {
 }
 
 
-our %words;
 
 sub getWords {
 	my ($file) = @_;
-	$file ||= '/etc/dictionaries-common/words';
-	my $words = $words{$file};
-	unless($words) {
+	$file ||= dirname($0) . '/words';
+	my $wordlist = $words{$file};
+	unless(defined($wordlist) && @$wordlist) {
 		open (my $fh, '<', $file)
 			or croak $!;
 		local $/;
-		@{$words{$file}} = split("\n", <$fh>);
+		@{$words{$file}} = grep !/^\s*$/, split("\n", <$fh>);
+		$wordlist = $words{$file};
 		close $fh;
 		undef $fh;
 	}
 	undef $file;
-	return $words->[int(rand(@$words))];
+
+	my $idx = int(rand(@$wordlist));
+	my $word = $wordlist->[$idx];
+	croak unless $word;
+	return $word;
 }
 
 sub randNum {
@@ -363,11 +368,12 @@ sub randName {
 	for(my $i=0; $len < $chars && $i < $words; $i++) {
 		$word = ucfirst(getWords($shortWordsFile));
 		$wl = length($word);
-		$text .= ' ' . $word if $len+$wl < $chars;
+		$text .= ' ' . $word;
 		$len += $wl + 1;
 	}
 	$text =~ s/[^\w\s]//g;
 	$text =~ s/^\s+|\s+$//;
+	$text = substr($text, 0, $chars);
 	undef $shortWordsFile;
 	undef $len;
 	undef $word;
@@ -381,12 +387,13 @@ sub randTitle {
 	my $text = '';
 	my ($len, $word, $wl) = (0);
 	for(my $i=0; $len < $chars; $i++) {
-		$word = getWords() until $word;
+		$word = getWords();
 		$wl = length($word);
-		$text .= ' ' . $word if $wl + $len < $chars;
+		$text .= ' ' . $word;
 		$len += $wl + 1;
 	}
 	$text =~ s/^\s+|\s+$//;
+	$text = substr($text,0,$chars);
 	return ucfirst $text;
 }
 
