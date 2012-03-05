@@ -71,6 +71,8 @@ our $opt = Getopt::Declare->new(q'
 	--exclude <COLSPEC>		Skip these columns from the output
 	-x <COLSPEC>			[ditto]
 
+	--xregex <COLSPEC>		Skip these columns from the output (regex match)
+
 	--include <COLSPEC>		Only include these columns in the output
 	-i <COLSPEC>			[ditto]
 
@@ -571,6 +573,17 @@ sub processRelFilter {
 sub processExclude {
 	if ($opt->{'--exclude'}) {
 		delete $kDefined{$_} for (split(',', $opt->{'--exclude'}));
+	}
+	if ($opt->{'--xregex'}) {
+		my @rx = (split(',', $opt->{'--xregex'}));
+		for (keys %kDefined) {
+			for my $rx (@rx) {
+				/$rx/ && do { 
+					print STDERR ">>>> $_ match $rx\n" if $VERBOSE;
+					delete $kDefined{$_};
+				};
+			}
+		}	
 	}
 }
 
