@@ -240,9 +240,8 @@ my ($val, @rels, $fieldLen, $count);
 OBJECT: for(my $i=0; $i < $opt->{'<NUM>'}; $i++) {
 	my $obj = {};
 FIELD: for my $field (@keys) {
-		my $type = fieldType($field);
-		my $func = 'rand' . $type;
-		croak "Unkown field type $type" unless defined(&$func);
+		my $func = 'rand' . fieldType($field);
+		$func = 'randText' unless defined(&$func);
 
 		printf STDERR ("[%20s] (%s) %s\n", $field, $func, $manyMap{$field} ? '**' : '') if $VERBOSE;
 		if ($manyMap{$field}) {
