@@ -212,8 +212,8 @@ sub createTypeMap {
 				if (defined(&$fn)) {
 					$typeMap{$fld} = $def->{Type};
 				} else {
-					$relMap{$_} = $def->{Type};
-					$typeMap{$_} = 'Reln';
+					$relMap{$fld} = $def->{Type};
+					$typeMap{$fld} = 'Reln';
 				}
 			}
 		}
@@ -273,10 +273,6 @@ sub fieldType {
 
 	if ($fieldDef->{$fld}) {
 		my $def = $fieldDef->{$fld};
-		if ($def->{UserType}) {
-			print STDERR "Using user-defined type |", $fieldDef->{$fld}->{UserType}, "| for field $fld\n" if $VERBOSE;
-			return $def->{UserType};
-		}
 		# Spec cases.
 		for($fld) {
 			/^Content$/ && do { return 'Htmltext' };
@@ -309,11 +305,11 @@ sub fieldType {
 
 sub fieldLen {
 	my ($fld) = @_;
+	if ($userColumns{$fld} && $userColumns{$fld}->{Len}) {
+		return $userColumns{$fld}->{Len};
+	}
 	if ($fieldDef->{$fld}) {
 		my $def = $fieldDef->{$fld};
-		if ($userColumns{$fld} && $userColumns{$fld}->{Len}) {
-			return $userColumns{$fld}->{Len};
-		}
 		for($fld) { # Convenience cases
 			/^Title$/ && do { return 20; };
 			/^MenuTitle$/ && do { return 30; };
