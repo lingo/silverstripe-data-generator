@@ -120,6 +120,7 @@ $opt->{'--columns'} ||= $opt->{'-c'};
 # Global vars
 our %words;
 our %typeMap = ();
+our %userColumns  = ();
 our %relMap = (); # For randReln and --maptype
 our %filters = (); # see --relfilter
 our %manyMap = (); # for --many
@@ -155,32 +156,71 @@ my %kDefined = map { $_ => 1 } keys %$fieldDef;
 
 processInherit();
 processColumns();
+print STDERR "User columns:\n", Dumper(\%userColumns) if $VERBOSE;
 processMapTable();
 processMany();
 processInclude();
 processExclude();
 processRelFilter();
 processImgDir();
+createTypeMap();
 
 delete $kDefined{ID};
 @keys = sort keys %kDefined;
 
-print STDERR "Field summary: \n" if $VERBOSE;
-for (@keys) {
-	my $type = fieldType($_);
-	my $func = 'rand' . $type;
-	if (!defined(&$func)) {
-		$relMap{$_} = $type;
-		$typeMap{$_} = 'Reln';
+
+sub getDBType {
+	my ($fld) = @_;
+	my $def = $fieldDef->{$fld};
+	for($def->{Type}) {
+		/^enum/ && do { return 'Enum'; };
+		/^int/ && do { return 'Num'; };
+		/^(varchar|text|mediumtext|char)/ && do { return 'Text'; };
+		/^datetime$/ && do { return 'Datetime'; };
+		/^date/ && do { return 'Time'; };
+		/^timestamp/ && do { return 'Timestamp'; };
 	}
-	my $table = '';
-	if ($typeMap{$_} && $typeMap{$_} eq 'Reln') {
-		$table = '[DB: ' . getTable($_) . '] ';
+}
+
+sub createTypeMap {
+	%typeMap = ();
+	for my $fld (sort keys %kDefined) {
+		# Field comes from DB
+		if ($fieldDef->{$fld}) {
+			$typeMap{$fld} = getDBType($fld);
+		}
+		# Make some guesses here if not specified.
+		for($fld) {
+			/^Content$/		&& do { $typeMap{$fld} = 'Htmltext' };
+			/^Email$/		&& do { $typeMap{$fld} = 'Email' };
+			/ID$/		 	&& do { $typeMap{$fld} = 'Reln'; };
+			/Image.*ID$/	&& do { $typeMap{$fld} = 'Image'; };
+			/Name$/i		&& do { $typeMap{$fld} = 'Name'; };
+			/^Title$/		&& do { $typeMap{$fld} = 'Title' };
+		}
+		if ($relMap{$fld}) {
+			$typeMap{$fld} = 'Reln';
+		}
+		if ($manyMap{$fld}) {
+			$typeMap{$fld} = 'Reln';
+		}
+		if ($userColumns{$fld}) {
+			my $def = $userColumns{$fld};
+			if ($def->{Type}) {
+				# IF unknown type is referenced, assume Reln and use type as table name
+				my $fn = 'rand' . ucfirst($def->{Type});
+				if (!defined(&$fn)) {
+					print STDERR "> Failed to find $fn for $_\n" if $VERBOSE;
+					$relMap{$_} = $def->{Type};
+					$typeMap{$_} = 'Reln';
+				}
+			}
+			if (!$typeMap{$fld} && $def->{Type}){
+				$typeMap{$fld} = $def;
+			}
+		}
 	}
-	print STDERR "$_ => [$type] => \&$func $table\n" if $VERBOSE;
-	undef $type;
-	undef $func;
-	undef $table;
+	print STDERR "TYPE MAP:\n", Dumper(\%typeMap) if $VERBOSE;
 }
 
 print STDERR "# Field defs (fieldDef):\n", Dumper(\$fieldDef) if $VERBOSE;
@@ -266,7 +306,7 @@ sub fieldType {
 	if ($manyMap{$fld}) {
 		return 'Reln';
 	}	
-	print "No fieldDef\n";
+	print STDERR "No fieldDef for $fld\n" if $VERBOSE;
 	return 'Text';
 }
 
@@ -274,8 +314,8 @@ sub fieldLen {
 	my ($fld) = @_;
 	if ($fieldDef->{$fld}) {
 		my $def = $fieldDef->{$fld};
-		if ($def->{UserLen}) {
-			return $def->{UserLen};
+		if ($userColumns{$fld} && $userColumns{$fld}->{Len}) {
+			return $userColumns{$fld}->{Len};
 		}
 		for($fld) { # Convenience cases
 			/^Title$/ && do { return 20; };
@@ -309,10 +349,10 @@ sub ipsum {
 	while($tlen < $len && $idx < scalar @sentences) {
 		$line = $sentences[$idx];
 		$llen = length($line);
-		$line .= '.';
+		$line .= '. ';
 		if ($tlen + $llen < $len) {
 			if ($breaks && (rand() < 0.3)) {
-				$text .= ($html ? '</p><p>' : "\n\n");
+				$text .= ($html ? '</p><p>' : "\\\n\\\n");
 			}
 			$text .= ucfirst($line);
 			$tlen = length($text);
@@ -468,13 +508,16 @@ sub randEnum {
 
 sub addUserColumn {
 	my ($col, $type, $len) = @_;
-	$fieldDef->{$col} ||= {};
+	#$fieldDef->{$col} ||= {};
+	$userColumns{$col} ||= {};
 	if ($type) {
 		$type = ucfirst lc $type;
-		$fieldDef->{$col}->{'UserType'} = $type;
+		$userColumns{$col}->{'Type'} = $type;
+		#$fieldDef->{$col}->{'UserType'} = $type;
 	}
 	if ($len) {
-		$fieldDef->{$col}->{'UserLen'} = $len;
+		$userColumns{$col}->{'Len'} = $len;
+		#$fieldDef->{$col}->{'UserLen'} = $len;
 	}
 	$kDefined{$col} = 1;
 	if ($opt->{'--include'}) {
@@ -608,7 +651,7 @@ sub processColumns {
 			my ($cn, $ct, $len) = split(':', $c);
 			if (!$len && is_numeric($ct)) {
 				$len = $ct;
-				$ct = fieldType($cn);
+				$ct = undef;#fieldType($cn);
 			}
 			addUserColumn($cn, $ct, $len);
 		}
