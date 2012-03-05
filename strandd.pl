@@ -155,15 +155,15 @@ Sort out columns which we will output
 my %kDefined = map { $_ => 1 } keys %$fieldDef;
 
 processInherit();
-processColumns();
-print STDERR "User columns:\n", Dumper(\%userColumns) if $VERBOSE;
-processMapTable();
 processMany();
 processInclude();
 processExclude();
+processMapTable();
 processRelFilter();
 processImgDir();
+processColumns();
 createTypeMap();
+print STDERR "User columns:\n", Dumper(\%userColumns) if $VERBOSE;
 
 delete $kDefined{ID};
 @keys = sort keys %kDefined;
@@ -209,21 +209,19 @@ sub createTypeMap {
 			if ($def->{Type}) {
 				# IF unknown type is referenced, assume Reln and use type as table name
 				my $fn = 'rand' . ucfirst($def->{Type});
-				if (!defined(&$fn)) {
-					print STDERR "> Failed to find $fn for $_\n" if $VERBOSE;
+				if (defined(&$fn)) {
+					$typeMap{$fld} = $def->{Type};
+				} else {
 					$relMap{$_} = $def->{Type};
 					$typeMap{$_} = 'Reln';
 				}
-			}
-			if (!$typeMap{$fld} && $def->{Type}){
-				$typeMap{$fld} = $def;
 			}
 		}
 	}
 	print STDERR "TYPE MAP:\n", Dumper(\%typeMap) if $VERBOSE;
 }
 
-print STDERR "# Field defs (fieldDef):\n", Dumper(\$fieldDef) if $VERBOSE;
+#print STDERR "# Field defs (fieldDef):\n", Dumper(\$fieldDef) if $VERBOSE;
 print STDERR "# Fields to output (keys):\n", Dumper(\@keys) if $VERBOSE;
 print STDERR "# Table mapping (relMap):\n", Dumper(\%relMap) if $VERBOSE;
 print STDERR "# Type map: (typeMap)\n", Dumper(\%typeMap) if $VERBOSE;
